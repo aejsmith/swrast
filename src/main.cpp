@@ -81,12 +81,15 @@ struct SVertex
     CVector4        colour;
 };
 
+// Fixed point type used during rasterisation.
+using Fixed = int32_t;
+
 // Structure describing a triangle during rasterisation.
 struct STriVertex
 {
     // Integer position.
-    int32_t         x;
-    int32_t         y;
+    Fixed           x;
+    Fixed           y;
 
     // Index in the original vertex data.
     size_t          index;
@@ -107,13 +110,13 @@ static void DrawTriangle(CSurface&      inSurface,
     // noticable artifacts, particularly with animation. Therefore, we snap to sub-pixel positions
     // instead. We use fixed-point arithmetic internally. Currently using 28.4, which is good for
     // vertex positions ranging from [-2048, 2047].
-    static constexpr int32_t kSubPixelBits = 4;
+    static constexpr Fixed kSubPixelBits = 4;
 
     // Sub-pixel step.
-    static constexpr int32_t kSubPixelStep = 1 << kSubPixelBits;
+    static constexpr Fixed kSubPixelStep = 1 << kSubPixelBits;
 
     // Sub-pixel mask.
-    static constexpr int32_t kSubPixelMask = kSubPixelStep - 1;
+    static constexpr Fixed kSubPixelMask = kSubPixelStep - 1;
 
     // We're following D3D10/GL conventions and have pixel centres at .5 offsets, i.e. position
     // (0.5, 0.5) corresponds exactly to the top left pixel.
@@ -140,7 +143,7 @@ static void DrawTriangle(CSurface&      inSurface,
             x = (x * halfWindowWidth)   + windowCentreX;
             y = (-y * halfWindowHeight) + windowCentreY;
 
-            // To deal with the pixel center, just bias the positions to have the center at exact
+            // To deal with the pixel centre, just bias the positions to have the centre at exact
             // integer coordinates.
             x -= kPixelCenter;
             y -= kPixelCenter;
@@ -158,7 +161,7 @@ static void DrawTriangle(CSurface&      inSurface,
 
     // Determine winding of the vertices, by calculating the barycentric weight of v2 - if it is
     // positive, then the winding is CCW.
-    const int32_t weight      = ((v0.x - v1.x) * (v2.y - v0.y)) - ((v0.y - v1.y) * (v2.x - v0.x));
+    const Fixed weight        = ((v0.x - v1.x) * (v2.y - v0.y)) - ((v0.y - v1.y) * (v2.x - v0.x));
     const ETriWinding winding = (weight < 0) ? kTriWinding_CW
                               : (weight > 0) ? kTriWinding_CCW
                                              : kTriWinding_Degenerate;
@@ -192,39 +195,38 @@ static void DrawTriangle(CSurface&      inSurface,
             const bool left = inB.y > inA.y;
             return top || left;
         };
-    const int32_t bias0 = (IsTopLeft(v1, v2)) ? 0 : -1;
-    const int32_t bias1 = (IsTopLeft(v2, v0)) ? 0 : -1;
-    const int32_t bias2 = (IsTopLeft(v0, v1)) ? 0 : -1;
+    const Fixed bias0 = (IsTopLeft(v1, v2)) ? 0 : -1;
+    const Fixed bias1 = (IsTopLeft(v2, v0)) ? 0 : -1;
+    const Fixed bias2 = (IsTopLeft(v0, v1)) ? 0 : -1;
 
     // Calculate the bounding box of the triangle, rounded to whole pixels (min rounds down, max
     // rounds up).
-    int32_t minX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kSubPixelMask;
-    int32_t minY = std::min(v0.y, std::min(v1.y, v2.y)) & ~kSubPixelMask;
-    int32_t maxX = (std::max(v0.x, std::max(v1.x, v2.x)) + kSubPixelMask) & ~kSubPixelMask;
-    int32_t maxY = (std::max(v0.y, std::max(v1.y, v2.y)) + kSubPixelMask) & ~kSubPixelMask;
+    Fixed minX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kSubPixelMask;
+    Fixed minY = std::min(v0.y, std::min(v1.y, v2.y)) & ~kSubPixelMask;
+    Fixed maxX = (std::max(v0.x, std::max(v1.x, v2.x)) + kSubPixelMask) & ~kSubPixelMask;
+    Fixed maxY = (std::max(v0.y, std::max(v1.y, v2.y)) + kSubPixelMask) & ~kSubPixelMask;
 
     // Clip to the surface area.
-    minX = std::max(minX, 0);
-    minY = std::max(minY, 0);
-    maxX = std::min(maxX, (static_cast<int32_t>(inSurface.GetWidth()) - 1) << kSubPixelBits);
-    maxY = std::min(maxY, (static_cast<int32_t>(inSurface.GetHeight()) - 1) << kSubPixelBits);
+    minX = std::max(minX, static_cast<Fixed>(0));
+    minY = std::max(minY, static_cast<Fixed>(0));
+    maxX = std::min(maxX, (static_cast<Fixed>(inSurface.GetWidth()) - 1) << kSubPixelBits);
+    maxY = std::min(maxY, (static_cast<Fixed>(inSurface.GetHeight()) - 1) << kSubPixelBits);
 
-    for (int32_t y = minY; y <= maxY; y += kSubPixelStep)
+    for (Fixed y = minY; y <= maxY; y += kSubPixelStep)
     {
-        for (int32_t x = minX; x <= maxX; x += kSubPixelStep)
+        for (Fixed x = minX; x <= maxX; x += kSubPixelStep)
         {
             // Calculate barycentric coordinates of this pixel. Things are swapped around a bit
             // here because Y is down in screen coordinates.
-            const int32_t w0 = ((v1.x - v2.x) * (y - v1.y)) - ((v1.y - v2.y) * (x - v1.x));
-            const int32_t w1 = ((v2.x - v0.x) * (y - v2.y)) - ((v2.y - v0.y) * (x - v2.x));
-            const int32_t w2 = ((v0.x - v1.x) * (y - v0.y)) - ((v0.y - v1.y) * (x - v0.x));
+            const Fixed w0 = ((v1.x - v2.x) * (y - v1.y)) - ((v1.y - v2.y) * (x - v1.x));
+            const Fixed w1 = ((v2.x - v0.x) * (y - v2.y)) - ((v2.y - v0.y) * (x - v2.x));
+            const Fixed w2 = ((v0.x - v1.x) * (y - v0.y)) - ((v0.y - v1.y) * (x - v0.x));
 
             // If these are all positive, then the pixel lies within the triangle.
             if (w0 + bias0 >= 0 && w1 + bias1 >= 0 && w2 + bias2 >= 0)
             {
-                // Barycentric interpolation.
-                // TODO: The GL spec gives different formulae for interpolating depth and other
-                // attributes, what's the difference?
+                // Barycentric interpolation. TODO: For all attributes other than depth, should
+                // perspective divide here.
                 const float wSum   = w0 + w1 + w2;
                 const float w0Norm = static_cast<float>(w0) / wSum;
                 const float w1Norm = static_cast<float>(w1) / wSum;
@@ -234,8 +236,8 @@ static void DrawTriangle(CSurface&      inSurface,
                                       + (w1Norm * inVertices[v1.index].colour)
                                       + (w2Norm * inVertices[v2.index].colour);
 
-                const int32_t pixelX = x >> kSubPixelBits;
-                const int32_t pixelY = y >> kSubPixelBits;
+                const Fixed pixelX = x >> kSubPixelBits;
+                const Fixed pixelY = y >> kSubPixelBits;
 
                 inSurface.WritePixel(pixelX,
                                      pixelY,
@@ -247,8 +249,6 @@ static void DrawTriangle(CSurface&      inSurface,
 
 static void Draw(CSurface& inSurface)
 {
-    inSurface.Clear();
-
     const SVertex vertices[3] =
     {
         {{-0.5f, -0.5f, 1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
@@ -293,6 +293,8 @@ int main(int argc, char** argv)
             if (event.type == SDL_QUIT)
                 break;
         }
+
+        surface.Clear();
 
         const uint64_t drawStart = SDL_GetPerformanceCounter();
 
