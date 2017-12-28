@@ -38,10 +38,10 @@ void CSurface::WritePixel(const uint32_t  inX,
 {
     uint32_t pixel = 0;
 
-    pixel |= static_cast<uint8_t>(inColour.a * 255) << 24;
-    pixel |= static_cast<uint8_t>(inColour.b * 255) << 16;
-    pixel |= static_cast<uint8_t>(inColour.g * 255) << 8;
-    pixel |= static_cast<uint8_t>(inColour.r * 255) << 0;
+    pixel |= (lround(inColour.a * 255) & 0xff) << 24;
+    pixel |= (lround(inColour.b * 255) & 0xff) << 16;
+    pixel |= (lround(inColour.g * 255) & 0xff) << 8;
+    pixel |= (lround(inColour.r * 255) & 0xff) << 0;
 
     const size_t offset = ((inY * mHeight) + inX) * sizeof(uint32_t);
 
