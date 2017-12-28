@@ -77,7 +77,7 @@ static void DrawLine(CSurface&       inSurface,
 // TODO: Replace this with a proper vertex attribute system.
 struct SVertex
 {
-    CVector2        position;
+    CVector4        position;
     CVector4        colour;
 };
 
@@ -119,14 +119,26 @@ static void DrawTriangle(CSurface&      inSurface,
     // (0.5, 0.5) corresponds exactly to the top left pixel.
     static constexpr float kPixelCenter = 0.5f;
 
+    // Window coordinate transformation parameters. TODO: Allow viewport to be specified.
+    const float halfWindowWidth  = static_cast<float>(inSurface.GetWidth()) / 2;
+    const float halfWindowHeight = static_cast<float>(inSurface.GetHeight()) / 2;
+    const float windowCentreX    = halfWindowWidth;
+    const float windowCentreY    = halfWindowHeight;
+
     // Set up internal vertex data.
     auto SetUpVertex =
         [&] (STriVertex& outVertex, const size_t inIndex)
         {
             const SVertex& sourceVertex = inVertices[inIndex];
 
-            float x = sourceVertex.position.x;
-            float y = sourceVertex.position.y;
+            // Convert homogeneous to NDC coordinates.
+            float x = sourceVertex.position.x / sourceVertex.position.w;
+            float y = sourceVertex.position.y / sourceVertex.position.w;
+
+            // Convert to window coordinates. We follow D3D conventions: clip/NDC space has Y
+            // pointing up, but window coordinates have it down. Therefore, invert Y here.
+            x = (x * halfWindowWidth)   + windowCentreX;
+            y = (-y * halfWindowHeight) + windowCentreY;
 
             // To deal with the pixel center, just bias the positions to have the center at exact
             // integer coordinates.
@@ -239,9 +251,9 @@ static void Draw(CSurface& inSurface)
 
     const SVertex vertices[3] =
     {
-        {{128, 384}, {1.0f, 0.0f, 0.0f, 1.0f}},
-        {{384, 384}, {0.0f, 1.0f, 0.0f, 1.0f}},
-        {{256, 128}, {0.0f, 0.0f, 1.0f, 1.0f}},
+        {{-0.5f, -0.5f, 1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+        {{ 0.5f, -0.5f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
+        {{ 0.0f,  0.5f, 1.0f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}},
     };
 
     DrawTriangle(inSurface, vertices);
