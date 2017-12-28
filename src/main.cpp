@@ -162,6 +162,28 @@ static void DrawTriangle(CSurface&      inSurface,
         return;
     }
 
+    // Follow the D3D/GL top-left fill rule: pixel centres on an edge are considered to be inside a
+    // triangle if that edge is a top or left edge. See:
+    // https://msdn.microsoft.com/en-us/library/windows/desktop/cc627092(v=vs.85).aspx#Triangle
+    //
+    // At this point the triangle is CCW. In a CCW triangle, a top edge is one that is exactly
+    // horizontal, and goes to the left. A left edge is just one that goes down.
+    //
+    // We implement the fill rule by applying a bias to the calculated weights of each pixel in the
+    // main loop based on whether the edge used to calculate that weight is top/left. The weight is
+    // 0 if the pixel is on the edge, so biasing this by -1 for edges which aren't top/left will
+    // exclude pixels which lie on it.
+    auto IsTopLeft =
+        [] (const STriVertex& inA, const STriVertex& inB)
+        {
+            const bool top  = inA.y == inB.y && inB.x < inA.x;
+            const bool left = inB.y > inA.y;
+            return top || left;
+        };
+    const int32_t bias0 = (IsTopLeft(v1, v2)) ? 0 : -1;
+    const int32_t bias1 = (IsTopLeft(v2, v0)) ? 0 : -1;
+    const int32_t bias2 = (IsTopLeft(v0, v1)) ? 0 : -1;
+
     // Calculate the bounding box of the triangle, rounded to whole pixels (min rounds down, max
     // rounds up).
     int32_t minX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kSubPixelMask;
@@ -186,7 +208,7 @@ static void DrawTriangle(CSurface&      inSurface,
             const int32_t w2 = ((v0.x - v1.x) * (y - v0.y)) - ((v0.y - v1.y) * (x - v0.x));
 
             // If these are all positive, then the pixel lies within the triangle.
-            if (w0 >= 0 && w1 >= 0 && w2 >= 0)
+            if (w0 + bias0 >= 0 && w1 + bias1 >= 0 && w2 + bias2 >= 0)
             {
                 // Barycentric interpolation.
                 // TODO: The GL spec gives different formulae for interpolating depth and other
