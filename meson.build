@@ -12,6 +12,7 @@ sdl_dep = dependency('sdl2')
 
 sources = [
     'src/CSurface.cpp',
+    'src/CRasteriser.cpp',
     'src/main.cpp',
 ]
 
