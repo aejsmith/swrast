@@ -53,26 +53,9 @@ public:
 public:
     union
     {
-        float               x;
-        float               r;
-    };
-
-    union
-    {
-        float               y;
-        float               g;
-    };
-
-    union
-    {
-        float               z;
-        float               b;
-    };
-
-    union
-    {
-        float               w;
-        float               a;
+        struct { float x, y, z, w; };
+        struct { float r, g, b, a; };
+        alignas(16) float values[4];
     };
 };
 
