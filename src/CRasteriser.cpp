@@ -18,19 +18,41 @@
 #include "CSurface.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <smmintrin.h>
 
 // Number of bits of sub-pixel precision. Snapping vertex positions to integers can cause noticable
 // artifacts, particularly with animation. Therefore, we snap to sub-pixel positions instead. We
 // use fixed-point arithmetic internally. Currently using 28.4, which is good for vertex positions
 // ranging from [-2048, 2047].
-static constexpr CRasteriser::Fixed kSubPixelBits = 4;
-static constexpr CRasteriser::Fixed kSubPixelStep = 1 << kSubPixelBits;
-static constexpr CRasteriser::Fixed kSubPixelMask = kSubPixelStep - 1;
+static constexpr int32_t kSubPixelBits = 4;
+static constexpr int32_t kSubPixelStep = 1 << kSubPixelBits;
+static constexpr int32_t kSubPixelMask = kSubPixelStep - 1;
+
+// Loop step per quad (we rasterize 2x2 quads at a time).
+static constexpr int32_t kQuadBits = kSubPixelBits + 1;
+static constexpr int32_t kQuadStep = 1 << kQuadBits;
+static constexpr int32_t kQuadMask = kQuadStep - 1;
 
 // We're following D3D10/GL conventions and have pixel centres at .5 offsets, i.e. position
 // (0.5, 0.5) corresponds exactly to the top left pixel.
 static constexpr float kPixelCenter = 0.5f;
+
+// _mm_shuffle_ps requires an immediate index. This mess is to work around that.
+template <size_t lane>
+struct ExtractLane
+{
+    float ExtractFloat(const __m128 inValue) const
+    {
+        return _mm_cvtss_f32(_mm_shuffle_ps(inValue, inValue, lane));
+    }
+
+    __m128 ExtractVector(const __m128 inValue) const
+    {
+        return _mm_shuffle_ps(inValue, inValue, _MM_SHUFFLE(lane, lane, lane, lane));
+    }
+};
 
 void CRasteriser::DrawTriangle(CSurface&      inSurface,
                                const SVertex* inVertices)
@@ -74,7 +96,7 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
 
     // Determine winding of the vertices, by calculating the barycentric weight of v2 - if it is
     // positive, then the winding is CCW.
-    const Fixed weight        = ((v0.x - v1.x) * (v2.y - v0.y)) - ((v0.y - v1.y) * (v2.x - v0.x));
+    const int32_t weight      = ((v0.x - v1.x) * (v2.y - v0.y)) - ((v0.y - v1.y) * (v2.x - v0.x));
     const ETriWinding winding = (weight < 0) ? kTriWinding_CW
                               : (weight > 0) ? kTriWinding_CCW
                                              : kTriWinding_Degenerate;
@@ -109,22 +131,27 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
             return top || left;
         };
 
-    const Fixed bias0 = (IsTopLeft(v1, v2)) ? 0 : -1;
-    const Fixed bias1 = (IsTopLeft(v2, v0)) ? 0 : -1;
-    const Fixed bias2 = (IsTopLeft(v0, v1)) ? 0 : -1;
+    const __m128i bias0 = _mm_set1_epi32((IsTopLeft(v1, v2)) ? 0 : -1);
+    const __m128i bias1 = _mm_set1_epi32((IsTopLeft(v2, v0)) ? 0 : -1);
+    const __m128i bias2 = _mm_set1_epi32((IsTopLeft(v0, v1)) ? 0 : -1);
 
-    // Calculate the bounding box of the triangle, rounded to whole pixels (min rounds down, max
-    // rounds up).
-    Fixed minX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kSubPixelMask;
-    Fixed minY = std::min(v0.y, std::min(v1.y, v2.y)) & ~kSubPixelMask;
-    Fixed maxX = (std::max(v0.x, std::max(v1.x, v2.x)) + kSubPixelMask) & ~kSubPixelMask;
-    Fixed maxY = (std::max(v0.y, std::max(v1.y, v2.y)) + kSubPixelMask) & ~kSubPixelMask;
+    // Calculate the bounding box of the triangle, rounded to whole 2x2 pixel quads (min rounds
+    // down, max rounds up).
+    int32_t minX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kQuadMask;
+    int32_t minY = std::min(v0.y, std::min(v1.y, v2.y)) & ~kQuadMask;
+    int32_t maxX = (std::max(v0.x, std::max(v1.x, v2.x)) + kQuadMask) & ~kQuadMask;
+    int32_t maxY = (std::max(v0.y, std::max(v1.y, v2.y)) + kQuadMask) & ~kQuadMask;
+
+    // FIXME: Handle non-multiple-of-2 surface sizes. Will be needed for viewport origin as well.
+    // We need to make sure we don't write to pixels outside the surface.
+    assert(!(inSurface.GetWidth() % 2));
+    assert(!(inSurface.GetHeight() % 2));
 
     // Clip to the surface area.
-    minX = std::max(minX, static_cast<Fixed>(0));
-    minY = std::max(minY, static_cast<Fixed>(0));
-    maxX = std::min(maxX, (static_cast<Fixed>(inSurface.GetWidth()) - 1) << kSubPixelBits);
-    maxY = std::min(maxY, (static_cast<Fixed>(inSurface.GetHeight()) - 1) << kSubPixelBits);
+    minX = std::max(minX, static_cast<int32_t>(0));
+    minY = std::max(minY, static_cast<int32_t>(0));
+    maxX = std::min(maxX, (static_cast<int32_t>(inSurface.GetWidth()) - 1) << kSubPixelBits);
+    maxY = std::min(maxY, (static_cast<int32_t>(inSurface.GetHeight()) - 1) << kSubPixelBits);
 
     // At each pixel, the barycentric weights are given by:
     //
@@ -132,64 +159,114 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     //   w1 = (x * (v0.y - v2.y)) + (y * (v2.x - v0.x)) + ((v0.x * v2.y) - (v0.y * v2.x))
     //   w2 = (x * (v1.y - v0.y)) + (y * (v0.x - v1.x)) + ((v1.x * v0.y) - (v1.y * v0.x))
     //
-    // The increment in the weight at each step in the X direction is given as follows:
-    const Fixed xStep0 = (v2.y - v1.y) << kSubPixelBits;
-    const Fixed xStep1 = (v0.y - v2.y) << kSubPixelBits;
-    const Fixed xStep2 = (v1.y - v0.y) << kSubPixelBits;
+    // The last part is a constant term:
+    const __m128i c0 = _mm_set1_epi32((v2.x * v1.y) - (v2.y * v1.x));
+    const __m128i c1 = _mm_set1_epi32((v0.x * v2.y) - (v0.y * v2.x));
+    const __m128i c2 = _mm_set1_epi32((v1.x * v0.y) - (v1.y * v0.x));
 
-    // The same for each step in the Y direction:
-    const Fixed yStep0 = (v1.x - v2.x) << kSubPixelBits;
-    const Fixed yStep1 = (v2.x - v0.x) << kSubPixelBits;
-    const Fixed yStep2 = (v0.x - v1.x) << kSubPixelBits;
+    // The increment in the weight at each pixel/quad in the X direction is given as follows:
+    const __m128i xStep0  = _mm_set1_epi32((v2.y - v1.y) << kSubPixelBits);
+    const __m128i xStep1  = _mm_set1_epi32((v0.y - v2.y) << kSubPixelBits);
+    const __m128i xStep2  = _mm_set1_epi32((v1.y - v0.y) << kSubPixelBits);
+    const __m128i xStep0Q = _mm_slli_epi32(xStep0, 1);
+    const __m128i xStep1Q = _mm_slli_epi32(xStep1, 1);
+    const __m128i xStep2Q = _mm_slli_epi32(xStep2, 1);
 
-    // Weight at the start of the first row:
-    Fixed w0Row = ((minY >> kSubPixelBits) * yStep0) + ((minX >> kSubPixelBits) * xStep0) + ((v2.x * v1.y) - (v2.y * v1.x));
-    Fixed w1Row = ((minY >> kSubPixelBits) * yStep1) + ((minX >> kSubPixelBits) * xStep1) + ((v0.x * v2.y) - (v0.y * v2.x));
-    Fixed w2Row = ((minY >> kSubPixelBits) * yStep2) + ((minX >> kSubPixelBits) * xStep2) + ((v1.x * v0.y) - (v1.y * v0.x));
+    // The same for each pixel/quad step in the Y direction:
+    const __m128i yStep0  = _mm_set1_epi32((v1.x - v2.x) << kSubPixelBits);
+    const __m128i yStep1  = _mm_set1_epi32((v2.x - v0.x) << kSubPixelBits);
+    const __m128i yStep2  = _mm_set1_epi32((v0.x - v1.x) << kSubPixelBits);
+    const __m128i yStep0Q = _mm_slli_epi32(yStep0, 1);
+    const __m128i yStep1Q = _mm_slli_epi32(yStep1, 1);
+    const __m128i yStep2Q = _mm_slli_epi32(yStep2, 1);
 
-    for (Fixed y = minY; y <= maxY; y += kSubPixelStep)
+    // Pixel offsets and min X/Y pixels for each SIMD lane.
+    // Lane 0 = top left, 1 = top right, 2 = bottom left, 3 = bottom right.
+    const __m128i xLaneOffset = _mm_set_epi32(1, 0, 1, 0);
+    const __m128i yLaneOffset = _mm_set_epi32(1, 1, 0, 0);
+    const __m128i laneMinX    = _mm_add_epi32(_mm_set1_epi32(minX >> kSubPixelBits), xLaneOffset);
+    const __m128i laneMinY    = _mm_add_epi32(_mm_set1_epi32(minY >> kSubPixelBits), yLaneOffset);
+
+    // Weight at the start of the row (incremented each Y iteration).
+    // w0Row = ((minY >> kSubPixelBits) * yStep0) + ((minX >> kSubPixelBits) * xStep0) + c0
+    __m128i w0Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep0), _mm_mullo_epi32(laneMinX, xStep0)), c0);
+    __m128i w1Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep1), _mm_mullo_epi32(laneMinX, xStep1)), c1);
+    __m128i w2Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep2), _mm_mullo_epi32(laneMinX, xStep2)), c2);
+
+    for (int32_t y = minY; y <= maxY; y += kQuadStep)
     {
-        Fixed w0 = w0Row;
-        Fixed w1 = w1Row;
-        Fixed w2 = w2Row;
+        __m128i w0 = w0Row;
+        __m128i w1 = w1Row;
+        __m128i w2 = w2Row;
 
-        for (Fixed x = minX; x <= maxX; x += kSubPixelStep)
+        for (int32_t x = minX; x <= maxX; x += kQuadStep)
         {
-            const Fixed w0Biased = w0 + bias0;
-            const Fixed w1Biased = w1 + bias1;
-            const Fixed w2Biased = w2 + bias2;
+            const __m128i zero = _mm_set1_epi32(0);
 
-            // If these are all positive, then the pixel lies within the triangle. We only care
-            // about sign here: ORing will yield a negative value if any weights are negative.
-            if ((w0Biased | w1Biased | w2Biased) >= 0)
+            // Sets each lane to 0xffffffff if the weight is < 0, i.e. the pixel is outside the
+            // triangle.
+            const __m128i cmp0 = _mm_cmplt_epi32(_mm_add_epi32(w0, bias0), zero);
+            const __m128i cmp1 = _mm_cmplt_epi32(_mm_add_epi32(w1, bias1), zero);
+            const __m128i cmp2 = _mm_cmplt_epi32(_mm_add_epi32(w2, bias2), zero);
+
+            // OR all of them together: if the result is not all ones, then at least one of the
+            // pixels is inside the triangle (all weights >= 0 for a lane).
+            const __m128i mask = _mm_or_si128(_mm_or_si128(cmp0, cmp1), cmp2);
+            if (!_mm_test_all_ones(mask))
             {
-                // Barycentric interpolation. TODO: For all attributes other than depth, should
-                // perspective divide here.
-                const float wSum   = w0 + w1 + w2;
-                const float w0Norm = static_cast<float>(w0) / wSum;
-                const float w1Norm = static_cast<float>(w1) / wSum;
-                const float w2Norm = static_cast<float>(w2) / wSum;
+                // Barycentric interpolation. Calculate the normalised barycentric weights.
+                const __m128 wSum   = _mm_cvtepi32_ps(_mm_add_epi32(_mm_add_epi32(w0, w1), w2));
+                const __m128 w0Norm = _mm_div_ps(_mm_cvtepi32_ps(w0), wSum);
+                const __m128 w1Norm = _mm_div_ps(_mm_cvtepi32_ps(w1), wSum);
+                const __m128 w2Norm = _mm_div_ps(_mm_cvtepi32_ps(w2), wSum);
 
-                const CVector4 colour = (w0Norm * inVertices[v0.index].colour)
-                                      + (w1Norm * inVertices[v1.index].colour)
-                                      + (w2Norm * inVertices[v2.index].colour);
+                const __m128 colour0 = _mm_load_ps(inVertices[v0.index].colour.values);
+                const __m128 colour1 = _mm_load_ps(inVertices[v1.index].colour.values);
+                const __m128 colour2 = _mm_load_ps(inVertices[v2.index].colour.values);
 
-                const Fixed pixelX = x >> kSubPixelBits;
-                const Fixed pixelY = y >> kSubPixelBits;
+                // More mess to work around _mm_shuffle_ps requiring a constant.
+                // TODO: Can this be vectorised better?
+                auto DoPixel =
+                    [&] (const uint8_t inLane, const auto& inExtractor)
+                    {
+                        if (_mm_extract_epi32(mask, inLane) == 0)
+                        {
+                            // This pixel is inside the triangle (see above).
+                            const int32_t pixelX = (x >> kSubPixelBits) + (inLane & 1);
+                            const int32_t pixelY = (y >> kSubPixelBits) + (inLane >> 1);
 
-                inSurface.WritePixel(pixelX,
-                                     pixelY,
-                                     colour);
+                            // Extract weights for this pixel.
+                            const __m128 pixelW0 = inExtractor.ExtractVector(w0Norm);
+                            const __m128 pixelW1 = inExtractor.ExtractVector(w1Norm);
+                            const __m128 pixelW2 = inExtractor.ExtractVector(w2Norm);
+
+                            // TODO: For all attributes other than depth, should perspective divide
+                            // here.
+                            CVector4 colour;
+                            _mm_store_ps(colour.values, _mm_add_ps(_mm_add_ps(_mm_mul_ps(pixelW0, colour0),
+                                                                              _mm_mul_ps(pixelW1, colour1)),
+                                                                              _mm_mul_ps(pixelW2, colour2)));
+
+                            inSurface.WritePixel(pixelX,
+                                                 pixelY,
+                                                 colour);
+                        }
+                    };
+
+                DoPixel(0, ExtractLane<0>());
+                DoPixel(1, ExtractLane<1>());
+                DoPixel(2, ExtractLane<2>());
+                DoPixel(3, ExtractLane<3>());
             }
 
-            w0 += xStep0;
-            w1 += xStep1;
-            w2 += xStep2;
+            w0 = _mm_add_epi32(w0, xStep0Q);
+            w1 = _mm_add_epi32(w1, xStep1Q);
+            w2 = _mm_add_epi32(w2, xStep2Q);
         }
 
-        w0Row += yStep0;
-        w1Row += yStep1;
-        w2Row += yStep2;
+        w0Row = _mm_add_epi32(w0Row, yStep0Q);
+        w1Row = _mm_add_epi32(w1Row, yStep1Q);
+        w2Row = _mm_add_epi32(w2Row, yStep2Q);
     }
 }
 

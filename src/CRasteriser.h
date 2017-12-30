@@ -35,10 +35,6 @@ struct SVertex
 class CRasteriser
 {
 public:
-    // Fixed point type used during rasterisation.
-    using Fixed           = int32_t;
-
-public:
                             CRasteriser() {}
                             ~CRasteriser() {}
 
@@ -50,8 +46,8 @@ private:
     struct STriVertex
     {
         // Integer position.
-        Fixed               x;
-        Fixed               y;
+        int32_t             x;
+        int32_t             y;
 
         // Index in the original vertex data (we may swap vertices around to fix winding).
         size_t              index;
