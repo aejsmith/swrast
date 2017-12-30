@@ -93,7 +93,7 @@ int main(int argc, char** argv)
         totalFrameTime += static_cast<double>((frameEnd - frameStart) * 1000) / perfFreq;
         numFrames++;
 
-        if (totalFrameTime >= 500.0)
+        if (totalFrameTime >= 2000.0)
         {
             const double avgDrawTime  = totalDrawTime  / numFrames;
             const double avgFrameTime = totalFrameTime / numFrames;

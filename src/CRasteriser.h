@@ -46,7 +46,7 @@ public:
                                          const SVertex* inVertices);
 
 private:
-    // Structure describing a triangle during rasterisation.
+    // Structure describing a vertex during rasterisation.
     struct STriVertex
     {
         // Integer position.
