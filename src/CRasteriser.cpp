@@ -165,20 +165,20 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     const __m128i c2 = _mm_set1_epi32((v1.x * v0.y) - (v1.y * v0.x));
 
     // The increment in the weight at each pixel/quad in the X direction is given as follows:
-    const __m128i xStep0  = _mm_set1_epi32((v2.y - v1.y) << kSubPixelBits);
-    const __m128i xStep1  = _mm_set1_epi32((v0.y - v2.y) << kSubPixelBits);
-    const __m128i xStep2  = _mm_set1_epi32((v1.y - v0.y) << kSubPixelBits);
-    const __m128i xStep0Q = _mm_slli_epi32(xStep0, 1);
-    const __m128i xStep1Q = _mm_slli_epi32(xStep1, 1);
-    const __m128i xStep2Q = _mm_slli_epi32(xStep2, 1);
+    const __m128i xStep0     = _mm_set1_epi32((v2.y - v1.y) << kSubPixelBits);
+    const __m128i xStep1     = _mm_set1_epi32((v0.y - v2.y) << kSubPixelBits);
+    const __m128i xStep2     = _mm_set1_epi32((v1.y - v0.y) << kSubPixelBits);
+    const __m128i xStep0Quad = _mm_slli_epi32(xStep0, 1);
+    const __m128i xStep1Quad = _mm_slli_epi32(xStep1, 1);
+    const __m128i xStep2Quad = _mm_slli_epi32(xStep2, 1);
 
     // The same for each pixel/quad step in the Y direction:
-    const __m128i yStep0  = _mm_set1_epi32((v1.x - v2.x) << kSubPixelBits);
-    const __m128i yStep1  = _mm_set1_epi32((v2.x - v0.x) << kSubPixelBits);
-    const __m128i yStep2  = _mm_set1_epi32((v0.x - v1.x) << kSubPixelBits);
-    const __m128i yStep0Q = _mm_slli_epi32(yStep0, 1);
-    const __m128i yStep1Q = _mm_slli_epi32(yStep1, 1);
-    const __m128i yStep2Q = _mm_slli_epi32(yStep2, 1);
+    const __m128i yStep0     = _mm_set1_epi32((v1.x - v2.x) << kSubPixelBits);
+    const __m128i yStep1     = _mm_set1_epi32((v2.x - v0.x) << kSubPixelBits);
+    const __m128i yStep2     = _mm_set1_epi32((v0.x - v1.x) << kSubPixelBits);
+    const __m128i yStep0Quad = _mm_slli_epi32(yStep0, 1);
+    const __m128i yStep1Quad = _mm_slli_epi32(yStep1, 1);
+    const __m128i yStep2Quad = _mm_slli_epi32(yStep2, 1);
 
     // Pixel offsets and min X/Y pixels for each SIMD lane.
     // Lane 0 = top left, 1 = top right, 2 = bottom left, 3 = bottom right.
@@ -192,6 +192,10 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     __m128i w0Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep0), _mm_mullo_epi32(laneMinX, xStep0)), c0);
     __m128i w1Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep1), _mm_mullo_epi32(laneMinX, xStep1)), c1);
     __m128i w2Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep2), _mm_mullo_epi32(laneMinX, xStep2)), c2);
+
+    const __m128 colour0 = _mm_load_ps(inVertices[v0.index].colour.values);
+    const __m128 colour1 = _mm_load_ps(inVertices[v1.index].colour.values);
+    const __m128 colour2 = _mm_load_ps(inVertices[v2.index].colour.values);
 
     for (int32_t y = minY; y <= maxY; y += kQuadStep)
     {
@@ -220,10 +224,6 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
                 const __m128 w1Norm = _mm_div_ps(_mm_cvtepi32_ps(w1), wSum);
                 const __m128 w2Norm = _mm_div_ps(_mm_cvtepi32_ps(w2), wSum);
 
-                const __m128 colour0 = _mm_load_ps(inVertices[v0.index].colour.values);
-                const __m128 colour1 = _mm_load_ps(inVertices[v1.index].colour.values);
-                const __m128 colour2 = _mm_load_ps(inVertices[v2.index].colour.values);
-
                 // More mess to work around _mm_shuffle_ps requiring a constant.
                 // TODO: Can this be vectorised better?
                 auto DoPixel =
@@ -243,9 +243,10 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
                             // TODO: For all attributes other than depth, should perspective divide
                             // here.
                             CVector4 colour;
-                            _mm_store_ps(colour.values, _mm_add_ps(_mm_add_ps(_mm_mul_ps(pixelW0, colour0),
-                                                                              _mm_mul_ps(pixelW1, colour1)),
-                                                                              _mm_mul_ps(pixelW2, colour2)));
+                            _mm_store_ps(colour.values,
+                                         _mm_add_ps(_mm_add_ps(_mm_mul_ps(pixelW0, colour0),
+                                                                          _mm_mul_ps(pixelW1, colour1)),
+                                                                          _mm_mul_ps(pixelW2, colour2)));
 
                             inSurface.WritePixel(pixelX,
                                                  pixelY,
@@ -259,14 +260,14 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
                 DoPixel(3, ExtractLane<3>());
             }
 
-            w0 = _mm_add_epi32(w0, xStep0Q);
-            w1 = _mm_add_epi32(w1, xStep1Q);
-            w2 = _mm_add_epi32(w2, xStep2Q);
+            w0 = _mm_add_epi32(w0, xStep0Quad);
+            w1 = _mm_add_epi32(w1, xStep1Quad);
+            w2 = _mm_add_epi32(w2, xStep2Quad);
         }
 
-        w0Row = _mm_add_epi32(w0Row, yStep0Q);
-        w1Row = _mm_add_epi32(w1Row, yStep1Q);
-        w2Row = _mm_add_epi32(w2Row, yStep2Q);
+        w0Row = _mm_add_epi32(w0Row, yStep0Quad);
+        w1Row = _mm_add_epi32(w1Row, yStep1Quad);
+        w2Row = _mm_add_epi32(w2Row, yStep2Quad);
     }
 }
 
