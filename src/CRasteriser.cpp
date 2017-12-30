@@ -126,18 +126,42 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     maxX = std::min(maxX, (static_cast<Fixed>(inSurface.GetWidth()) - 1) << kSubPixelBits);
     maxY = std::min(maxY, (static_cast<Fixed>(inSurface.GetHeight()) - 1) << kSubPixelBits);
 
+    // At each pixel, the barycentric weights are given by:
+    //
+    //   w0 = (x * (v2.y - v1.y)) + (y * (v1.x - v2.x)) + ((v2.x * v1.y) - (v2.y * v1.x))
+    //   w1 = (x * (v0.y - v2.y)) + (y * (v2.x - v0.x)) + ((v0.x * v2.y) - (v0.y * v2.x))
+    //   w2 = (x * (v1.y - v0.y)) + (y * (v0.x - v1.x)) + ((v1.x * v0.y) - (v1.y * v0.x))
+    //
+    // The increment in the weight at each step in the X direction is given as follows:
+    const Fixed xStep0 = (v2.y - v1.y) << kSubPixelBits;
+    const Fixed xStep1 = (v0.y - v2.y) << kSubPixelBits;
+    const Fixed xStep2 = (v1.y - v0.y) << kSubPixelBits;
+
+    // The same for each step in the Y direction:
+    const Fixed yStep0 = (v1.x - v2.x) << kSubPixelBits;
+    const Fixed yStep1 = (v2.x - v0.x) << kSubPixelBits;
+    const Fixed yStep2 = (v0.x - v1.x) << kSubPixelBits;
+
+    // Weight at the start of the first row:
+    Fixed w0Row = ((minY >> kSubPixelBits) * yStep0) + ((minX >> kSubPixelBits) * xStep0) + ((v2.x * v1.y) - (v2.y * v1.x));
+    Fixed w1Row = ((minY >> kSubPixelBits) * yStep1) + ((minX >> kSubPixelBits) * xStep1) + ((v0.x * v2.y) - (v0.y * v2.x));
+    Fixed w2Row = ((minY >> kSubPixelBits) * yStep2) + ((minX >> kSubPixelBits) * xStep2) + ((v1.x * v0.y) - (v1.y * v0.x));
+
     for (Fixed y = minY; y <= maxY; y += kSubPixelStep)
     {
+        Fixed w0 = w0Row;
+        Fixed w1 = w1Row;
+        Fixed w2 = w2Row;
+
         for (Fixed x = minX; x <= maxX; x += kSubPixelStep)
         {
-            // Calculate barycentric coordinates of this pixel. Things are swapped around a bit
-            // here because Y is down in screen coordinates.
-            const Fixed w0 = ((v1.x - v2.x) * (y - v1.y)) - ((v1.y - v2.y) * (x - v1.x));
-            const Fixed w1 = ((v2.x - v0.x) * (y - v2.y)) - ((v2.y - v0.y) * (x - v2.x));
-            const Fixed w2 = ((v0.x - v1.x) * (y - v0.y)) - ((v0.y - v1.y) * (x - v0.x));
+            const Fixed w0Biased = w0 + bias0;
+            const Fixed w1Biased = w1 + bias1;
+            const Fixed w2Biased = w2 + bias2;
 
-            // If these are all positive, then the pixel lies within the triangle.
-            if (w0 + bias0 >= 0 && w1 + bias1 >= 0 && w2 + bias2 >= 0)
+            // If these are all positive, then the pixel lies within the triangle. We only care
+            // about sign here: ORing will yield a negative value if any weights are negative.
+            if ((w0Biased | w1Biased | w2Biased) >= 0)
             {
                 // Barycentric interpolation. TODO: For all attributes other than depth, should
                 // perspective divide here.
@@ -157,7 +181,15 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
                                      pixelY,
                                      colour);
             }
+
+            w0 += xStep0;
+            w1 += xStep1;
+            w2 += xStep2;
         }
+
+        w0Row += yStep0;
+        w1Row += yStep1;
+        w2Row += yStep2;
     }
 }
 
