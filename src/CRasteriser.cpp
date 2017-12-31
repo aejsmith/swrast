@@ -136,11 +136,12 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     const __m128i bias2 = _mm_set1_epi32((IsTopLeft(v0, v1)) ? 0 : -1);
 
     // Calculate the bounding box of the triangle, rounded to whole 2x2 pixel quads (min rounds
-    // down, max rounds up).
-    int32_t minX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kQuadMask;
-    int32_t minY = std::min(v0.y, std::min(v1.y, v2.y)) & ~kQuadMask;
-    int32_t maxX = (std::max(v0.x, std::max(v1.x, v2.x)) + kQuadMask) & ~kQuadMask;
-    int32_t maxY = (std::max(v0.y, std::max(v1.y, v2.y)) + kQuadMask) & ~kQuadMask;
+    // down, max rounds up). Since we want to include the maximum pixels, always round up (i.e.
+    // multiples of 2 are still rounded to the next).
+    int32_t startX = std::min(v0.x, std::min(v1.x, v2.x)) & ~kQuadMask;
+    int32_t startY = std::min(v0.y, std::min(v1.y, v2.y)) & ~kQuadMask;
+    int32_t endX   = (std::max(v0.x, std::max(v1.x, v2.x)) + kQuadStep) & ~kQuadMask;
+    int32_t endY   = (std::max(v0.y, std::max(v1.y, v2.y)) + kQuadStep) & ~kQuadMask;
 
     // FIXME: Handle non-multiple-of-2 surface sizes. Will be needed for viewport origin as well.
     // We need to make sure we don't write to pixels outside the surface.
@@ -148,10 +149,10 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     assert(!(inSurface.GetHeight() % 2));
 
     // Clip to the surface area.
-    minX = std::max(minX, static_cast<int32_t>(0));
-    minY = std::max(minY, static_cast<int32_t>(0));
-    maxX = std::min(maxX, (static_cast<int32_t>(inSurface.GetWidth()) - 1) << kSubPixelBits);
-    maxY = std::min(maxY, (static_cast<int32_t>(inSurface.GetHeight()) - 1) << kSubPixelBits);
+    startX = std::max(startX, static_cast<int32_t>(0));
+    startY = std::max(startY, static_cast<int32_t>(0));
+    endX   = std::min(endX,  (static_cast<int32_t>(inSurface.GetWidth()))  << kSubPixelBits);
+    endY   = std::min(endY,  (static_cast<int32_t>(inSurface.GetHeight())) << kSubPixelBits);
 
     // At each pixel, the barycentric weights are given by:
     //
@@ -184,26 +185,26 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     // Lane 0 = top left, 1 = top right, 2 = bottom left, 3 = bottom right.
     const __m128i xLaneOffset = _mm_set_epi32(1, 0, 1, 0);
     const __m128i yLaneOffset = _mm_set_epi32(1, 1, 0, 0);
-    const __m128i laneMinX    = _mm_add_epi32(_mm_set1_epi32(minX >> kSubPixelBits), xLaneOffset);
-    const __m128i laneMinY    = _mm_add_epi32(_mm_set1_epi32(minY >> kSubPixelBits), yLaneOffset);
+    const __m128i startXLane  = _mm_add_epi32(_mm_set1_epi32(startX >> kSubPixelBits), xLaneOffset);
+    const __m128i startYLane  = _mm_add_epi32(_mm_set1_epi32(startY >> kSubPixelBits), yLaneOffset);
 
     // Weight at the start of the row (incremented each Y iteration).
-    // w0Row = ((minY >> kSubPixelBits) * yStep0) + ((minX >> kSubPixelBits) * xStep0) + c0
-    __m128i w0Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep0), _mm_mullo_epi32(laneMinX, xStep0)), c0);
-    __m128i w1Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep1), _mm_mullo_epi32(laneMinX, xStep1)), c1);
-    __m128i w2Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(laneMinY, yStep2), _mm_mullo_epi32(laneMinX, xStep2)), c2);
+    // w0Row = ((startY >> kSubPixelBits) * yStep0) + ((startX >> kSubPixelBits) * xStep0) + c0
+    __m128i w0Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(startYLane, yStep0), _mm_mullo_epi32(startXLane, xStep0)), c0);
+    __m128i w1Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(startYLane, yStep1), _mm_mullo_epi32(startXLane, xStep1)), c1);
+    __m128i w2Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(startYLane, yStep2), _mm_mullo_epi32(startXLane, xStep2)), c2);
 
     const __m128 colour0 = _mm_load_ps(inVertices[v0.index].colour.values);
     const __m128 colour1 = _mm_load_ps(inVertices[v1.index].colour.values);
     const __m128 colour2 = _mm_load_ps(inVertices[v2.index].colour.values);
 
-    for (int32_t y = minY; y <= maxY; y += kQuadStep)
+    for (int32_t y = startY; y < endY; y += kQuadStep)
     {
         __m128i w0 = w0Row;
         __m128i w1 = w1Row;
         __m128i w2 = w2Row;
 
-        for (int32_t x = minX; x <= maxX; x += kQuadStep)
+        for (int32_t x = startX; x < endX; x += kQuadStep)
         {
             const __m128i zero = _mm_set1_epi32(0);
 
