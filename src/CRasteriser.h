@@ -16,10 +16,7 @@
 
 #pragma once
 
-#include "CVector.h"
-
-#include <cstdint>
-#include <cstddef>
+#include "Types.h"
 
 class CSurface;
 

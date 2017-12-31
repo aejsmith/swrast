@@ -16,11 +16,11 @@
 
 #include "CRasteriser.h"
 #include "CSurface.h"
+#include "SIMDTypes.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <smmintrin.h>
 
 // Number of bits of sub-pixel precision. Snapping vertex positions to integers can cause noticable
 // artifacts, particularly with animation. Therefore, we snap to sub-pixel positions instead. We
@@ -38,21 +38,6 @@ static constexpr int32_t kQuadMask = kQuadStep - 1;
 // We're following D3D10/GL conventions and have pixel centres at .5 offsets, i.e. position
 // (0.5, 0.5) corresponds exactly to the top left pixel.
 static constexpr float kPixelCenter = 0.5f;
-
-// _mm_shuffle_ps requires an immediate index. This mess is to work around that.
-template <size_t lane>
-struct ExtractLane
-{
-    float ExtractFloat(const __m128 inValue) const
-    {
-        return _mm_cvtss_f32(_mm_shuffle_ps(inValue, inValue, lane));
-    }
-
-    __m128 ExtractVector(const __m128 inValue) const
-    {
-        return _mm_shuffle_ps(inValue, inValue, _MM_SHUFFLE(lane, lane, lane, lane));
-    }
-};
 
 void CRasteriser::DrawTriangle(CSurface&      inSurface,
                                const SVertex* inVertices)
@@ -131,9 +116,9 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
             return top || left;
         };
 
-    const __m128i bias0 = _mm_set1_epi32((IsTopLeft(v1, v2)) ? 0 : -1);
-    const __m128i bias1 = _mm_set1_epi32((IsTopLeft(v2, v0)) ? 0 : -1);
-    const __m128i bias2 = _mm_set1_epi32((IsTopLeft(v0, v1)) ? 0 : -1);
+    const CSIMDInt32 bias0 = (IsTopLeft(v1, v2)) ? 0 : -1;
+    const CSIMDInt32 bias1 = (IsTopLeft(v2, v0)) ? 0 : -1;
+    const CSIMDInt32 bias2 = (IsTopLeft(v0, v1)) ? 0 : -1;
 
     // Calculate the bounding box of the triangle, rounded to whole 2x2 pixel quads (min rounds
     // down, max rounds up). Since we want to include the maximum pixels, always round up (i.e.
@@ -161,112 +146,104 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
     //   w2 = (x * (v1.y - v0.y)) + (y * (v0.x - v1.x)) + ((v1.x * v0.y) - (v1.y * v0.x))
     //
     // The last part is a constant term:
-    const __m128i c0 = _mm_set1_epi32((v2.x * v1.y) - (v2.y * v1.x));
-    const __m128i c1 = _mm_set1_epi32((v0.x * v2.y) - (v0.y * v2.x));
-    const __m128i c2 = _mm_set1_epi32((v1.x * v0.y) - (v1.y * v0.x));
+    const CSIMDInt32 c0         = (v2.x * v1.y) - (v2.y * v1.x);
+    const CSIMDInt32 c1         = (v0.x * v2.y) - (v0.y * v2.x);
+    const CSIMDInt32 c2         = (v1.x * v0.y) - (v1.y * v0.x);
 
     // The increment in the weight at each pixel/quad in the X direction is given as follows:
-    const __m128i xStep0     = _mm_set1_epi32((v2.y - v1.y) << kSubPixelBits);
-    const __m128i xStep1     = _mm_set1_epi32((v0.y - v2.y) << kSubPixelBits);
-    const __m128i xStep2     = _mm_set1_epi32((v1.y - v0.y) << kSubPixelBits);
-    const __m128i xStep0Quad = _mm_slli_epi32(xStep0, 1);
-    const __m128i xStep1Quad = _mm_slli_epi32(xStep1, 1);
-    const __m128i xStep2Quad = _mm_slli_epi32(xStep2, 1);
+    const CSIMDInt32 xStep0     = (v2.y - v1.y) << kSubPixelBits;
+    const CSIMDInt32 xStep1     = (v0.y - v2.y) << kSubPixelBits;
+    const CSIMDInt32 xStep2     = (v1.y - v0.y) << kSubPixelBits;
+    const CSIMDInt32 xStep0Quad = xStep0 << 1;
+    const CSIMDInt32 xStep1Quad = xStep1 << 1;
+    const CSIMDInt32 xStep2Quad = xStep2 << 1;
 
     // The same for each pixel/quad step in the Y direction:
-    const __m128i yStep0     = _mm_set1_epi32((v1.x - v2.x) << kSubPixelBits);
-    const __m128i yStep1     = _mm_set1_epi32((v2.x - v0.x) << kSubPixelBits);
-    const __m128i yStep2     = _mm_set1_epi32((v0.x - v1.x) << kSubPixelBits);
-    const __m128i yStep0Quad = _mm_slli_epi32(yStep0, 1);
-    const __m128i yStep1Quad = _mm_slli_epi32(yStep1, 1);
-    const __m128i yStep2Quad = _mm_slli_epi32(yStep2, 1);
+    const CSIMDInt32 yStep0     = (v1.x - v2.x) << kSubPixelBits;
+    const CSIMDInt32 yStep1     = (v2.x - v0.x) << kSubPixelBits;
+    const CSIMDInt32 yStep2     = (v0.x - v1.x) << kSubPixelBits;
+    const CSIMDInt32 yStep0Quad = yStep0 << 1;
+    const CSIMDInt32 yStep1Quad = yStep1 << 1;
+    const CSIMDInt32 yStep2Quad = yStep2 << 1;
 
     // Pixel offsets and min X/Y pixels for each SIMD lane.
     // Lane 0 = top left, 1 = top right, 2 = bottom left, 3 = bottom right.
-    const __m128i xLaneOffset = _mm_set_epi32(1, 0, 1, 0);
-    const __m128i yLaneOffset = _mm_set_epi32(1, 1, 0, 0);
-    const __m128i startXLane  = _mm_add_epi32(_mm_set1_epi32(startX >> kSubPixelBits), xLaneOffset);
-    const __m128i startYLane  = _mm_add_epi32(_mm_set1_epi32(startY >> kSubPixelBits), yLaneOffset);
+    const CSIMDInt32 xLaneOffset(0, 1, 0, 1);
+    const CSIMDInt32 yLaneOffset(0, 0, 1, 1);
+    const CSIMDInt32 startXLane = (startX >> kSubPixelBits) + xLaneOffset;
+    const CSIMDInt32 startYLane = (startY >> kSubPixelBits) + yLaneOffset;
 
     // Weight at the start of the row (incremented each Y iteration).
-    // w0Row = ((startY >> kSubPixelBits) * yStep0) + ((startX >> kSubPixelBits) * xStep0) + c0
-    __m128i w0Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(startYLane, yStep0), _mm_mullo_epi32(startXLane, xStep0)), c0);
-    __m128i w1Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(startYLane, yStep1), _mm_mullo_epi32(startXLane, xStep1)), c1);
-    __m128i w2Row = _mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(startYLane, yStep2), _mm_mullo_epi32(startXLane, xStep2)), c2);
+    CSIMDInt32 w0Row = (startYLane * yStep0) + (startXLane * xStep0) + c0;
+    CSIMDInt32 w1Row = (startYLane * yStep1) + (startXLane * xStep1) + c1;
+    CSIMDInt32 w2Row = (startYLane * yStep2) + (startXLane * xStep2) + c2;
 
-    const __m128 colour0 = _mm_load_ps(inVertices[v0.index].colour.values);
-    const __m128 colour1 = _mm_load_ps(inVertices[v1.index].colour.values);
-    const __m128 colour2 = _mm_load_ps(inVertices[v2.index].colour.values);
+    const CSIMDFloat colour0 = inVertices[v0.index].colour;
+    const CSIMDFloat colour1 = inVertices[v1.index].colour;
+    const CSIMDFloat colour2 = inVertices[v2.index].colour;
+
+    const CSIMDInt32 zero = 0;
 
     for (int32_t y = startY; y < endY; y += kQuadStep)
     {
-        __m128i w0 = w0Row;
-        __m128i w1 = w1Row;
-        __m128i w2 = w2Row;
+        CSIMDInt32 w0 = w0Row;
+        CSIMDInt32 w1 = w1Row;
+        CSIMDInt32 w2 = w2Row;
 
         for (int32_t x = startX; x < endX; x += kQuadStep)
         {
-            const __m128i zero = _mm_set1_epi32(0);
-
             // Sets each lane to 0xffffffff if the weight is < 0, i.e. the pixel is outside the
             // triangle.
-            const __m128i cmp0 = _mm_cmplt_epi32(_mm_add_epi32(w0, bias0), zero);
-            const __m128i cmp1 = _mm_cmplt_epi32(_mm_add_epi32(w1, bias1), zero);
-            const __m128i cmp2 = _mm_cmplt_epi32(_mm_add_epi32(w2, bias2), zero);
+            const CSIMDInt32 cmp0 = CSIMDInt32::LessThan(w0 + bias0, zero);
+            const CSIMDInt32 cmp1 = CSIMDInt32::LessThan(w1 + bias1, zero);
+            const CSIMDInt32 cmp2 = CSIMDInt32::LessThan(w2 + bias2, zero);
 
             // OR all of them together: if the result is not all ones, then at least one of the
             // pixels is inside the triangle (all weights >= 0 for a lane).
-            const __m128i mask = _mm_or_si128(_mm_or_si128(cmp0, cmp1), cmp2);
-            if (!_mm_test_all_ones(mask))
+            const CSIMDInt32 mask = cmp0 | cmp1 | cmp2;
+            if (!CSIMDInt32::AllOnes(mask))
             {
                 // Barycentric interpolation. Calculate the normalised barycentric weights.
-                const __m128 wSum   = _mm_cvtepi32_ps(_mm_add_epi32(_mm_add_epi32(w0, w1), w2));
-                const __m128 w0Norm = _mm_div_ps(_mm_cvtepi32_ps(w0), wSum);
-                const __m128 w1Norm = _mm_div_ps(_mm_cvtepi32_ps(w1), wSum);
-                const __m128 w2Norm = _mm_div_ps(_mm_cvtepi32_ps(w2), wSum);
+                const CSIMDFloat wSum   = static_cast<CSIMDFloat>(w0 + w1 + w2);
+                const CSIMDFloat w0Norm = static_cast<CSIMDFloat>(w0) / wSum;
+                const CSIMDFloat w1Norm = static_cast<CSIMDFloat>(w1) / wSum;
+                const CSIMDFloat w2Norm = static_cast<CSIMDFloat>(w2) / wSum;
 
-                // More mess to work around _mm_shuffle_ps requiring a constant.
                 // TODO: Can this be vectorised better?
-                auto DoPixel =
-                    [&] (const uint8_t inLane, const auto& inExtractor)
+                for (uint8_t lane = 0; lane < 4; lane++)
+                {
+                    if (CSIMDInt32::ExtractScalar(mask, lane) == 0)
                     {
-                        if (_mm_extract_epi32(mask, inLane) == 0)
-                        {
-                            // This pixel is inside the triangle (see above).
-                            const int32_t pixelX = (x >> kSubPixelBits) + (inLane & 1);
-                            const int32_t pixelY = (y >> kSubPixelBits) + (inLane >> 1);
+                        // This pixel is inside the triangle (see above).
+                        const int32_t pixelX = (x >> kSubPixelBits) + (lane & 1);
+                        const int32_t pixelY = (y >> kSubPixelBits) + (lane >> 1);
 
-                            // Extract weights for this pixel.
-                            const __m128 pixelW0 = inExtractor.ExtractVector(w0Norm);
-                            const __m128 pixelW1 = inExtractor.ExtractVector(w1Norm);
-                            const __m128 pixelW2 = inExtractor.ExtractVector(w2Norm);
+                        // Extract weights for this pixel.
+                        const CSIMDFloat pixelW0 = CSIMDFloat::Extract(w0Norm, lane);
+                        const CSIMDFloat pixelW1 = CSIMDFloat::Extract(w1Norm, lane);
+                        const CSIMDFloat pixelW2 = CSIMDFloat::Extract(w2Norm, lane);
 
-                            // TODO: For all attributes other than depth, should perspective divide
-                            // here.
-                            const __m128 colour = _mm_add_ps(_mm_add_ps(_mm_mul_ps(pixelW0, colour0),
-                                                                        _mm_mul_ps(pixelW1, colour1)),
-                                                                        _mm_mul_ps(pixelW2, colour2));
+                        // TODO: For all attributes other than depth, should perspective divide
+                        // here.
+                        const CSIMDFloat colour = pixelW0 * colour0
+                                                + pixelW1 * colour1
+                                                + pixelW2 * colour2;
 
-                            inSurface.WritePixel(pixelX,
-                                                 pixelY,
-                                                 colour);
-                        }
-                    };
-
-                DoPixel(0, ExtractLane<0>());
-                DoPixel(1, ExtractLane<1>());
-                DoPixel(2, ExtractLane<2>());
-                DoPixel(3, ExtractLane<3>());
+                        inSurface.WritePixel(pixelX,
+                                             pixelY,
+                                             colour.GetValue());
+                    }
+                }
             }
 
-            w0 = _mm_add_epi32(w0, xStep0Quad);
-            w1 = _mm_add_epi32(w1, xStep1Quad);
-            w2 = _mm_add_epi32(w2, xStep2Quad);
+            w0 += xStep0Quad;
+            w1 += xStep1Quad;
+            w2 += xStep2Quad;
         }
 
-        w0Row = _mm_add_epi32(w0Row, yStep0Quad);
-        w1Row = _mm_add_epi32(w1Row, yStep1Quad);
-        w2Row = _mm_add_epi32(w2Row, yStep2Quad);
+        w0Row += yStep0Quad;
+        w1Row += yStep1Quad;
+        w2Row += yStep2Quad;
     }
 }
 

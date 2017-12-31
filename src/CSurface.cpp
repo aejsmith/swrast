@@ -15,9 +15,9 @@
 //
 
 #include "CSurface.h"
+#include "SIMDTypes.h"
 
 #include <SDL.h>
-#include <smmintrin.h>
 
 CSurface::CSurface(const uint32_t inWidth,
                    const uint32_t inHeight) :
@@ -37,24 +37,24 @@ void CSurface::WritePixel(const uint32_t  inX,
                           const uint32_t  inY,
                           const CVector4& inColour)
 {
-    WritePixel(inX, inY, _mm_load_ps(inColour.values));
+    WritePixel(inX, inY, CSIMDFloat(inColour));
 }
 
-void CSurface::WritePixel(const uint32_t  inX,
-                          const uint32_t  inY,
-                          const __m128    inColour)
+void CSurface::WritePixel(const uint32_t   inX,
+                          const uint32_t   inY,
+                          const CSIMDFloat inColour)
 {
     __m128 f;
     __m128i i;
 
     // Convert to integer value, with 1.0 = 255. Default rounding mode for the conversion should be
     // round to nearest.
-    f = _mm_mul_ps(inColour, _mm_set1_ps(255.0f));
+    f = _mm_mul_ps(inColour.GetValue(), _mm_set1_ps(255.0f));
     i = _mm_cvtps_epi32(f);
 
     // Pack to signed 16-bit integers, then from that to unsigned 8-bit. This clamps to between
     // 0 and 255.
-    i = _mm_packus_epi32(i, i);
+    i = _mm_packs_epi32(i, i);
     i = _mm_packus_epi16(i, i);
 
     // Grab the low 32 bits, which now have each value in the correct bit positions.
