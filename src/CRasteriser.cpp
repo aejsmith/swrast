@@ -242,11 +242,9 @@ void CRasteriser::DrawTriangle(CSurface&      inSurface,
 
                             // TODO: For all attributes other than depth, should perspective divide
                             // here.
-                            CVector4 colour;
-                            _mm_store_ps(colour.values,
-                                         _mm_add_ps(_mm_add_ps(_mm_mul_ps(pixelW0, colour0),
-                                                                          _mm_mul_ps(pixelW1, colour1)),
-                                                                          _mm_mul_ps(pixelW2, colour2)));
+                            const __m128 colour = _mm_add_ps(_mm_add_ps(_mm_mul_ps(pixelW0, colour0),
+                                                                        _mm_mul_ps(pixelW1, colour1)),
+                                                                        _mm_mul_ps(pixelW2, colour2));
 
                             inSurface.WritePixel(pixelX,
                                                  pixelY,

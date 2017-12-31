@@ -19,6 +19,7 @@
 #include "CVector.h"
 
 #include <memory>
+#include <smmintrin.h>
 
 struct SDL_Surface;
 
@@ -34,6 +35,9 @@ public:
     void                        WritePixel(const uint32_t  inX,
                                            const uint32_t  inY,
                                            const CVector4& inColour);
+    void                        WritePixel(const uint32_t  inX,
+                                           const uint32_t  inY,
+                                           const __m128    inColour);
 
     SDL_Surface*                CreateSDLSurface();
 

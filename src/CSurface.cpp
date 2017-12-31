@@ -37,15 +37,19 @@ void CSurface::WritePixel(const uint32_t  inX,
                           const uint32_t  inY,
                           const CVector4& inColour)
 {
+    WritePixel(inX, inY, _mm_load_ps(inColour.values));
+}
+
+void CSurface::WritePixel(const uint32_t  inX,
+                          const uint32_t  inY,
+                          const __m128    inColour)
+{
     __m128 f;
     __m128i i;
 
-    // Load from vector.
-    f = _mm_load_ps(inColour.values);
-
     // Convert to integer value, with 1.0 = 255. Default rounding mode for the conversion should be
     // round to nearest.
-    f = _mm_mul_ps(f, _mm_set1_ps(255.0f));
+    f = _mm_mul_ps(inColour, _mm_set1_ps(255.0f));
     i = _mm_cvtps_epi32(f);
 
     // Pack to signed 16-bit integers, then from that to unsigned 8-bit. This clamps to between
