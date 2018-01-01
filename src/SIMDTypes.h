@@ -106,7 +106,16 @@ inline CSIMDInt32::CSIMDInt32(const CSIMDFloat inValue) :
 
 inline int32_t CSIMDInt32::ExtractScalar(const CSIMDInt32 inValue, const uint8_t inLane)
 {
-    return _mm_extract_epi32(inValue.GetValue(), inLane);
+    // _mm_extract_epi32 requires an immediate value, it will not compile if we just pass inLane
+    // directly. With any luck the compiler should constant fold this.
+    switch (inLane)
+    {
+        case 0:  return _mm_extract_epi32(inValue.GetValue(), 0);
+        case 1:  return _mm_extract_epi32(inValue.GetValue(), 1);
+        case 2:  return _mm_extract_epi32(inValue.GetValue(), 2);
+        case 3:  return _mm_extract_epi32(inValue.GetValue(), 3);
+        default: __builtin_unreachable();
+    }
 }
 
 inline CSIMDInt32 CSIMDInt32::LessThan(const CSIMDInt32 inLHS, const CSIMDInt32 inRHS)
@@ -169,8 +178,8 @@ inline CSIMDFloat::CSIMDFloat(const CVector4& inValue) :
 
 inline CSIMDFloat CSIMDFloat::Extract(const CSIMDFloat inValue, const uint8_t inLane)
 {
-    // _mm_shuffle_ps requires an immediate value, it will not compile on clang if we just pass
-    // inLane directly. With any luck the compiler should constant fold this.
+    // _mm_shuffle_ps requires an immediate value, it will not compile if we just pass inLane
+    // directly. With any luck the compiler should constant fold this.
     switch (inLane)
     {
         case 0:  return _mm_shuffle_ps(inValue.GetValue(), inValue.GetValue(), _MM_SHUFFLE(0, 0, 0, 0));

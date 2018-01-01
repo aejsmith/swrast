@@ -2,7 +2,7 @@ project('swrast',
         'cpp',
         default_options: ['cpp_std=c++14'])
 
-cpp_args = ['-Wall', '-Werror', '-Wno-unused-function', '-Wno-unused-variable']
+cpp_args = ['-Wall', '-Werror', '-Wno-unused-function', '-Wno-unused-variable', '-msse4.1']
 
 foreach a : cpp_args
     add_project_arguments(a, language: 'cpp')
